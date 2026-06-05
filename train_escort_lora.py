@@ -90,20 +90,17 @@ def fire_callback(callback_url, payload):
         print(f"[TRAIN] Callback failed: {e}", flush=True)
 
 
-def main():
-    t_start = time.time()
+def train(zip_url, trigger_word='escort_person', training_steps=1000,
+          lora_rank=16, resolution=512, hf_token='', lora_id='',
+          network_volume='/runpod-volume'):
+    """
+    Run DreamBooth LoRA training. Returns result dict on success, raises on failure.
 
-    # ─── Read environment ───
-    zip_url = os.environ.get('TRAINING_ZIP_URL', '')
-    trigger_word = os.environ.get('TRIGGER_WORD', 'escort_person')
-    training_steps = int(os.environ.get('TRAINING_STEPS', '1000'))
-    lora_rank = int(os.environ.get('LORA_RANK', '16'))
-    resolution = int(os.environ.get('RESOLUTION', '512'))
-    hf_token = os.environ.get('HF_TOKEN', '')
-    callback_url = os.environ.get('CALLBACK_URL', '')
-    lora_id = os.environ.get('LORA_ID', '')
-    network_volume = os.environ.get('NETWORK_VOLUME', '/runpod-volume')
-    webhook_secret = os.environ.get('WEBHOOK_SECRET', '')
+    Returns:
+        dict with keys: status, storage_key, trigger_word, training_time_seconds,
+        lora_size_mb, image_count, gpu, resolution
+    """
+    t_start = time.time()
 
     print("=" * 60, flush=True)
     print("[TRAIN] TGND Escort LoRA Training", flush=True)
@@ -113,12 +110,7 @@ def main():
     print("=" * 60, flush=True)
 
     if not zip_url:
-        print("[TRAIN] ERROR: TRAINING_ZIP_URL not set", flush=True)
-        fire_callback(callback_url, {
-            'lora_id': lora_id, 'status': 'failed',
-            'error': 'No training ZIP URL', 'secret': webhook_secret,
-        })
-        sys.exit(1)
+        raise ValueError('No training ZIP URL provided')
 
     # ─── HuggingFace auth ───
     if hf_token:
@@ -153,16 +145,10 @@ def main():
     print(f"[TRAIN] Found {count} valid training images", flush=True)
 
     if count < 5:
-        print(f"[TRAIN] ERROR: Need at least 5 images, got {count}", flush=True)
-        fire_callback(callback_url, {
-            'lora_id': lora_id, 'status': 'failed',
-            'error': f'Too few images: {count}', 'secret': webhook_secret,
-        })
-        sys.exit(1)
+        raise ValueError(f'Too few images: {count}')
 
     if count > 30:
         print(f"[TRAIN] WARNING: {count} images, using first 30", flush=True)
-        # Remove excess images
         for img in sorted(images)[30:]:
             os.remove(img)
 
@@ -185,7 +171,6 @@ def main():
     quant_flags = "--do_fp8_training" if gpu['use_fp8'] else f"--bnb_quantization_config_path={bnb_config}"
 
     # ─── Check for cached base model ───
-    # Using Flux 1 Dev until FLUX.2-dev HF license is accepted
     model_id = "black-forest-labs/FLUX.1-dev"
     volume_model_path = os.path.join(network_volume, "flux-dev")
 
@@ -199,18 +184,12 @@ def main():
     # ─── Find DreamBooth script ───
     train_script = "/app/diffusers/examples/dreambooth/train_dreambooth_lora_flux2.py"
     if not os.path.exists(train_script):
-        # Fallback: try Flux 1 script
         train_script_v1 = "/app/diffusers/examples/dreambooth/train_dreambooth_lora_flux.py"
         if os.path.exists(train_script_v1):
             print(f"[TRAIN] Flux 2 script not found, falling back to Flux 1 script", flush=True)
             train_script = train_script_v1
         else:
-            print(f"[TRAIN] ERROR: No DreamBooth training script found", flush=True)
-            fire_callback(callback_url, {
-                'lora_id': lora_id, 'status': 'failed',
-                'error': 'Training script not found', 'secret': webhook_secret,
-            })
-            sys.exit(1)
+            raise RuntimeError('No DreamBooth training script found')
 
     print(f"[TRAIN] Using training script: {train_script}", flush=True)
 
@@ -229,10 +208,7 @@ def main():
     print("=" * 60, flush=True)
     t0 = time.time()
 
-    # Gradient accumulation: effective batch = 1 * 4 = 4
     grad_accum = 4
-
-    # Checkpointing every 250 steps
     checkpoint_steps = min(250, training_steps // 2)
 
     train_cmd = f"""accelerate launch {train_script} \
@@ -258,16 +234,7 @@ def main():
   --mixed_precision=bf16 \
   --seed=42"""
 
-    try:
-        run(train_cmd)
-    except subprocess.CalledProcessError as e:
-        print(f"[TRAIN] Training failed with exit code {e.returncode}", flush=True)
-        fire_callback(callback_url, {
-            'lora_id': lora_id, 'status': 'failed',
-            'error': f'Training process exited with code {e.returncode}',
-            'secret': webhook_secret,
-        })
-        sys.exit(1)
+    run(train_cmd)
 
     train_elapsed = time.time() - t0
     print(f"[TRAIN] Training completed in {train_elapsed / 60:.1f} minutes", flush=True)
@@ -275,12 +242,7 @@ def main():
     # ─── Verify output ───
     lora_file = os.path.join(output_dir, "pytorch_lora_weights.safetensors")
     if not os.path.exists(lora_file):
-        print(f"[TRAIN] ERROR: LoRA weights not found at {lora_file}", flush=True)
-        fire_callback(callback_url, {
-            'lora_id': lora_id, 'status': 'failed',
-            'error': 'LoRA weights file not produced', 'secret': webhook_secret,
-        })
-        sys.exit(1)
+        raise RuntimeError('LoRA weights file not produced')
 
     lora_size_mb = os.path.getsize(lora_file) / 1024 / 1024
     print(f"[TRAIN] LoRA weights: {lora_size_mb:.1f}MB", flush=True)
@@ -295,17 +257,16 @@ def main():
         dest_path = os.path.join(volume_lora_dir, dest_filename)
 
         shutil.copy2(lora_file, dest_path)
-        storage_key = dest_path  # e.g. /runpod-volume/loras/escort_42.safetensors
+        storage_key = dest_path
 
         print(f"[TRAIN] LoRA saved to volume: {storage_key}", flush=True)
     else:
         print("[TRAIN] WARNING: No network volume, LoRA only in /output", flush=True)
         storage_key = lora_file
 
-    # ─── Fire completion callback ───
     total_elapsed = time.time() - t_start
-    fire_callback(callback_url, {
-        'lora_id': lora_id,
+
+    result = {
         'status': 'ready',
         'storage_key': storage_key,
         'trigger_word': trigger_word,
@@ -314,14 +275,51 @@ def main():
         'image_count': count,
         'gpu': gpu['name'],
         'resolution': resolution,
-        'secret': webhook_secret,
-    })
+    }
 
     print("\n" + "=" * 60, flush=True)
     print(f"[TRAIN] ALL DONE in {total_elapsed / 60:.1f} minutes", flush=True)
     print(f"[TRAIN] LoRA: {storage_key}", flush=True)
     print(f"[TRAIN] Trigger: {trigger_word}", flush=True)
     print("=" * 60, flush=True)
+
+    return result
+
+
+def main():
+    """Thin wrapper: reads env vars and calls train(). Backwards compatible for standalone use."""
+    zip_url = os.environ.get('TRAINING_ZIP_URL', '')
+    trigger_word = os.environ.get('TRIGGER_WORD', 'escort_person')
+    training_steps = int(os.environ.get('TRAINING_STEPS', '1000'))
+    lora_rank = int(os.environ.get('LORA_RANK', '16'))
+    resolution = int(os.environ.get('RESOLUTION', '512'))
+    hf_token = os.environ.get('HF_TOKEN', '')
+    callback_url = os.environ.get('CALLBACK_URL', '')
+    lora_id = os.environ.get('LORA_ID', '')
+    network_volume = os.environ.get('NETWORK_VOLUME', '/runpod-volume')
+    webhook_secret = os.environ.get('WEBHOOK_SECRET', '')
+
+    try:
+        result = train(
+            zip_url=zip_url,
+            trigger_word=trigger_word,
+            training_steps=training_steps,
+            lora_rank=lora_rank,
+            resolution=resolution,
+            hf_token=hf_token,
+            lora_id=lora_id,
+            network_volume=network_volume,
+        )
+        result['lora_id'] = lora_id
+        result['secret'] = webhook_secret
+        fire_callback(callback_url, result)
+    except Exception as e:
+        print(f"[TRAIN] FAILED: {e}", flush=True)
+        fire_callback(callback_url, {
+            'lora_id': lora_id, 'status': 'failed',
+            'error': str(e), 'secret': webhook_secret,
+        })
+        sys.exit(1)
 
 
 if __name__ == "__main__":

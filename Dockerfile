@@ -20,7 +20,8 @@ RUN pip install --no-cache-dir \
     ftfy \
     huggingface_hub \
     requests \
-    Pillow
+    Pillow \
+    runpod
 
 # Clone diffusers for DreamBooth training script (baked into image)
 RUN git clone --depth 1 https://github.com/huggingface/diffusers /app/diffusers && \
@@ -29,8 +30,9 @@ RUN git clone --depth 1 https://github.com/huggingface/diffusers /app/diffusers 
 # Verify critical imports work at build time
 RUN python3 -c "from diffusers import FluxPipeline; from peft import LoraConfig; print('All imports OK')"
 
-# Copy training entry script
+# Copy training module + serverless handler
 COPY train_escort_lora.py /app/train_escort_lora.py
+COPY handler.py /app/handler.py
 
-# Pod runs training, then exits (not a serverless handler)
-CMD ["python3", "-u", "/app/train_escort_lora.py"]
+# Serverless handler entry point
+CMD ["python3", "-u", "/app/handler.py"]
