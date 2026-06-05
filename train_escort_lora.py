@@ -185,8 +185,9 @@ def main():
     quant_flags = "--do_fp8_training" if gpu['use_fp8'] else f"--bnb_quantization_config_path={bnb_config}"
 
     # ─── Check for cached base model ───
-    model_id = "black-forest-labs/FLUX.2-dev"
-    volume_model_path = os.path.join(network_volume, "flux2-dev")
+    # Using Flux 1 Dev until FLUX.2-dev HF license is accepted
+    model_id = "black-forest-labs/FLUX.1-dev"
+    volume_model_path = os.path.join(network_volume, "flux-dev")
 
     if os.path.exists(volume_model_path) and os.listdir(volume_model_path):
         print(f"[TRAIN] Using cached model from {volume_model_path}", flush=True)
