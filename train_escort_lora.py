@@ -125,14 +125,6 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
         os.environ['HF_TOKEN'] = hf_token
         run(f"huggingface-cli login --token {hf_token}")
 
-    # ─── Cache models to network volume if available ───
-    cache_dir = os.path.join(network_volume, "hf-cache") if os.path.exists(network_volume) else None
-    if cache_dir:
-        os.makedirs(cache_dir, exist_ok=True)
-        os.environ['HF_HOME'] = cache_dir
-        os.environ['TRANSFORMERS_CACHE'] = cache_dir
-        print(f"[TRAIN] HF cache: {cache_dir}", flush=True)
-
     # ─── Download + extract training images ───
     print("[TRAIN] Downloading training images...", flush=True)
     os.makedirs("/data/images", exist_ok=True)
