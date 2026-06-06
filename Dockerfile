@@ -13,7 +13,7 @@ RUN git clone --depth 1 https://github.com/huggingface/diffusers /app/diffusers
 # Install diffusers from source + other training dependencies
 RUN pip install --no-cache-dir \
     /app/diffusers \
-    'transformers>=4.44.0' \
+    'transformers>=4.44.0,<5.0.0' \
     'accelerate>=0.31.0' \
     'peft>=0.14.0' \
     bitsandbytes \
