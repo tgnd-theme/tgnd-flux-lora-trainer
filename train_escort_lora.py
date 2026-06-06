@@ -285,24 +285,33 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
     else:
         print("[TRAIN] No network volume, uploading to HuggingFace Hub...", flush=True)
 
-    # Always upload to HF Hub as backup / primary storage
-    if hf_token:
+    # Upload LoRA file to WordPress if callback URL is available
+    callback_url = os.environ.get('CALLBACK_URL', '')
+    webhook_secret = os.environ.get('WEBHOOK_SECRET', '')
+    if callback_url and not storage_key:
         try:
-            hf_filename = f"escort_{lora_id}.safetensors"
-            repo_id = "JulioIglesiass/tgnd-escort-loras"
+            import requests
+            upload_url = callback_url.replace('/webhook', '/upload-lora')
+            dest_filename = f"escort_{lora_id}.safetensors"
+            print(f"[TRAIN] Uploading LoRA to {upload_url}...", flush=True)
 
-            # Use CLI for reliable upload (handles repo creation + auth)
-            run(f"huggingface-cli upload {repo_id} {lora_file} {hf_filename} --private")
-
-            hf_url = f"https://huggingface.co/{repo_id}/resolve/main/{hf_filename}"
-            print(f"[TRAIN] LoRA uploaded to HF: {hf_url}", flush=True)
-
-            if not storage_key:
-                storage_key = hf_url
-        except Exception as e:
-            print(f"[TRAIN] HF upload failed: {e}", flush=True)
-            if not storage_key:
+            with open(lora_file, 'rb') as f:
+                resp = requests.post(
+                    upload_url,
+                    files={'lora_file': (dest_filename, f, 'application/octet-stream')},
+                    data={'lora_id': lora_id, 'secret': webhook_secret},
+                    timeout=300,
+                )
+            if resp.status_code == 200:
+                result_data = resp.json()
+                storage_key = result_data.get('storage_key', '')
+                print(f"[TRAIN] LoRA uploaded: {storage_key}", flush=True)
+            else:
+                print(f"[TRAIN] Upload failed: {resp.status_code} {resp.text[:200]}", flush=True)
                 storage_key = lora_file
+        except Exception as e:
+            print(f"[TRAIN] Upload failed: {e}", flush=True)
+            storage_key = lora_file
 
     total_elapsed = time.time() - t_start
 
