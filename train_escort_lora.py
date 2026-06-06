@@ -183,11 +183,14 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
     model_id = "black-forest-labs/FLUX.1-dev"
     volume_model_path = os.path.join(network_volume, "flux-dev")
 
-    if os.path.exists(volume_model_path) and os.listdir(volume_model_path):
+    # The cached model from inference may be incomplete for DreamBooth training.
+    # Check for model_index.json which DreamBooth requires.
+    model_index = os.path.join(volume_model_path, "model_index.json")
+    if os.path.exists(model_index):
         print(f"[TRAIN] Using cached model from {volume_model_path}", flush=True)
         model_source = volume_model_path
     else:
-        print(f"[TRAIN] Will download model from HF Hub: {model_id}", flush=True)
+        print(f"[TRAIN] Volume model incomplete or missing, using HF Hub: {model_id}", flush=True)
         model_source = model_id
 
     # ─── Find DreamBooth script ───
