@@ -35,7 +35,7 @@ def run(cmd, **kwargs):
         print(result.stderr, flush=True)
     if result.returncode != 0:
         error_detail = result.stderr[-2000:] if result.stderr else "no stderr"
-        raise subprocess.CalledProcessError(result.returncode, cmd, output=result.stdout, stderr=error_detail)
+        raise RuntimeError(f"Command failed (exit {result.returncode}):\n{error_detail}")
 
 
 def download_file(url, dest):
