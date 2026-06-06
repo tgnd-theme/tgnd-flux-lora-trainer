@@ -171,27 +171,24 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
         resolution = 512
         print(f"[TRAIN] Capped resolution at 512 (<24GB VRAM)", flush=True)
 
-    # Quantization config
+    # Quantization config for NF4 (saves VRAM)
     bnb_config = "/data/bnb_config.json"
     with open(bnb_config, "w") as f:
         f.write('{"load_in_4bit": true, "bnb_4bit_quant_type": "nf4"}')
 
-    # Always use NF4 quantization — FP8 has compatibility issues with some diffusers versions
-    quant_flags = f"--bnb_quantization_config_path={bnb_config}"
-
     # ─── Base model ───
-    # Always use HF Hub ID — the volume cache from inference is incomplete for
-    # DreamBooth (missing preprocessor_config.json etc). HuggingFace Hub has its
-    # own cache at ~/.cache/huggingface so subsequent runs are fast.
-    model_source = "black-forest-labs/FLUX.1-dev"
+    model_source = "black-forest-labs/FLUX.2-dev"
     print(f"[TRAIN] Model: {model_source}", flush=True)
 
     # ─── Find DreamBooth script ───
-    # Use the Flux 1 script — we train on FLUX.1-dev, not Flux 2.
-    # The flux2 script requires preprocessor_config.json which Flux 1 doesn't have.
-    train_script = "/app/diffusers/examples/dreambooth/train_dreambooth_lora_flux.py"
+    train_script = "/app/diffusers/examples/dreambooth/train_dreambooth_lora_flux2.py"
     if not os.path.exists(train_script):
-        raise RuntimeError('DreamBooth training script not found')
+        # Fallback to Flux 1 script with Flux 1 model
+        train_script = "/app/diffusers/examples/dreambooth/train_dreambooth_lora_flux.py"
+        model_source = "black-forest-labs/FLUX.1-dev"
+        print(f"[TRAIN] Flux 2 script not found, falling back to Flux 1", flush=True)
+        if not os.path.exists(train_script):
+            raise RuntimeError('DreamBooth training script not found')
 
     print(f"[TRAIN] Using training script: {train_script}", flush=True)
 
@@ -213,7 +210,10 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
     grad_accum = 4
     checkpoint_steps = min(250, training_steps // 2)
 
-    train_cmd = f"""accelerate launch {train_script} \
+    # Build training command — args differ between Flux 1 and Flux 2 scripts
+    is_flux2 = "flux2" in train_script
+    if is_flux2:
+        train_cmd = f"""accelerate launch {train_script} \
   --pretrained_model_name_or_path={model_source} \
   --instance_data_dir=/data/images \
   --output_dir={output_dir} \
@@ -224,10 +224,30 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
   --train_batch_size=1 \
   --gradient_accumulation_steps={grad_accum} \
   --gradient_checkpointing \
-  {quant_flags} \
+  --bnb_quantization_config_path={bnb_config} \
   --remote_text_encoder \
   --cache_latents \
   --use_8bit_adam \
+  --learning_rate=1e-4 \
+  --lr_scheduler=constant_with_warmup \
+  --lr_warmup_steps=50 \
+  --max_train_steps={training_steps} \
+  --checkpointing_steps={checkpoint_steps} \
+  --mixed_precision=bf16 \
+  --seed=42"""
+    else:
+        train_cmd = f"""accelerate launch {train_script} \
+  --pretrained_model_name_or_path={model_source} \
+  --instance_data_dir=/data/images \
+  --output_dir={output_dir} \
+  --instance_prompt="{instance_prompt}" \
+  --resolution={resolution} \
+  --rank={lora_rank} \
+  --train_batch_size=1 \
+  --gradient_accumulation_steps={grad_accum} \
+  --gradient_checkpointing \
+  --cache_latents \
+  --optimizer=adamw8bit \
   --learning_rate=1e-4 \
   --lr_scheduler=constant_with_warmup \
   --lr_warmup_steps=50 \
