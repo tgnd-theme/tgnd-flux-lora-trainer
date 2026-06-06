@@ -187,14 +187,11 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
     print(f"[TRAIN] Model: {model_source}", flush=True)
 
     # ─── Find DreamBooth script ───
-    train_script = "/app/diffusers/examples/dreambooth/train_dreambooth_lora_flux2.py"
+    # Use the Flux 1 script — we train on FLUX.1-dev, not Flux 2.
+    # The flux2 script requires preprocessor_config.json which Flux 1 doesn't have.
+    train_script = "/app/diffusers/examples/dreambooth/train_dreambooth_lora_flux.py"
     if not os.path.exists(train_script):
-        train_script_v1 = "/app/diffusers/examples/dreambooth/train_dreambooth_lora_flux.py"
-        if os.path.exists(train_script_v1):
-            print(f"[TRAIN] Flux 2 script not found, falling back to Flux 1 script", flush=True)
-            train_script = train_script_v1
-        else:
-            raise RuntimeError('No DreamBooth training script found')
+        raise RuntimeError('DreamBooth training script not found')
 
     print(f"[TRAIN] Using training script: {train_script}", flush=True)
 
