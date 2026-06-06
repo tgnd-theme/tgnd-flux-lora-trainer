@@ -35,8 +35,5 @@ RUN python3 -c "from diffusers import FluxPipeline; from peft import LoraConfig;
 # Copy training module + serverless handler
 COPY train_escort_lora.py /app/train_escort_lora.py
 COPY handler.py /app/handler.py
-COPY entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
-
-# Smart entrypoint: serverless if RUNPOD_ENDPOINT_ID set, else standalone training
-CMD ["/app/entrypoint.sh"]
+# Default: standalone training (pods). For serverless, override CMD to handler.py
+CMD ["python3", "-u", "/app/train_escort_lora.py"]
