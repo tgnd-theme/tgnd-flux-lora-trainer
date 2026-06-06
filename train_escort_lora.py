@@ -225,7 +225,6 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
   --gradient_accumulation_steps={grad_accum} \
   --gradient_checkpointing \
   --bnb_quantization_config_path={bnb_config} \
-  --remote_text_encoder \
   --cache_latents \
   --use_8bit_adam \
   --learning_rate=1e-4 \
