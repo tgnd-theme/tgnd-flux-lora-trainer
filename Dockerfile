@@ -32,8 +32,11 @@ RUN pip install --no-cache-dir -r /app/diffusers/examples/dreambooth/requirement
 # Verify critical imports work at build time
 RUN python3 -c "from diffusers import FluxPipeline; from peft import LoraConfig; import diffusers; print(f'diffusers {diffusers.__version__} OK')"
 
-# Copy training module + serverless handler
+# Copy training module + serverless handler + entrypoint
 COPY train_escort_lora.py /app/train_escort_lora.py
 COPY handler.py /app/handler.py
-# Default: standalone training (pods). For serverless, override CMD to handler.py
-CMD ["python3", "-u", "/app/train_escort_lora.py"]
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+# Entrypoint: auto-detects serverless (RUNPOD_ENDPOINT_ID) vs pod mode
+CMD ["/app/entrypoint.sh"]
