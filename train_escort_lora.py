@@ -55,7 +55,8 @@ def detect_gpu():
     import torch
     cc = torch.cuda.get_device_capability()
     gpu_name = torch.cuda.get_device_name()
-    vram_gb = torch.cuda.get_device_properties(0).total_mem / 1024**3
+    props = torch.cuda.get_device_properties(0)
+    vram_gb = (getattr(props, 'total_memory', 0) or getattr(props, 'total_mem', 0)) / 1024**3
     use_fp8 = cc[0] > 8 or (cc[0] == 8 and cc[1] >= 9)
 
     print(f"[TRAIN] GPU: {gpu_name}", flush=True)
