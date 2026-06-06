@@ -28,7 +28,14 @@ import json
 
 def run(cmd, **kwargs):
     print(f"\n>>> {cmd}", flush=True)
-    subprocess.run(cmd, shell=True, check=True, **kwargs)
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, **kwargs)
+    if result.stdout:
+        print(result.stdout, flush=True)
+    if result.stderr:
+        print(result.stderr, flush=True)
+    if result.returncode != 0:
+        error_detail = result.stderr[-2000:] if result.stderr else "no stderr"
+        raise subprocess.CalledProcessError(result.returncode, cmd, output=result.stdout, stderr=error_detail)
 
 
 def download_file(url, dest):
