@@ -169,7 +169,8 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
     with open(bnb_config, "w") as f:
         f.write('{"load_in_4bit": true, "bnb_4bit_quant_type": "nf4"}')
 
-    quant_flags = "--do_fp8_training" if gpu['use_fp8'] else f"--bnb_quantization_config_path={bnb_config}"
+    # Always use NF4 quantization — FP8 has compatibility issues with some diffusers versions
+    quant_flags = f"--bnb_quantization_config_path={bnb_config}"
 
     # ─── Check for cached base model ───
     model_id = "black-forest-labs/FLUX.1-dev"
