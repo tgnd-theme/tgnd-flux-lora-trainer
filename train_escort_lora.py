@@ -288,22 +288,12 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
     # Always upload to HF Hub as backup / primary storage
     if hf_token:
         try:
-            from huggingface_hub import HfApi
-            api = HfApi(token=hf_token)
+            hf_filename = f"escort_{lora_id}.safetensors"
             repo_id = "JulioIglesiass/tgnd-escort-loras"
 
-            # Create repo if it doesn't exist
-            try:
-                api.create_repo(repo_id, private=True, exist_ok=True)
-            except Exception:
-                pass
+            # Use CLI for reliable upload (handles repo creation + auth)
+            run(f"huggingface-cli upload {repo_id} {lora_file} {hf_filename} --private")
 
-            hf_filename = f"escort_{lora_id}.safetensors"
-            api.upload_file(
-                path_or_fileobj=lora_file,
-                path_in_repo=hf_filename,
-                repo_id=repo_id,
-            )
             hf_url = f"https://huggingface.co/{repo_id}/resolve/main/{hf_filename}"
             print(f"[TRAIN] LoRA uploaded to HF: {hf_url}", flush=True)
 
