@@ -156,9 +156,9 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
     if count < 5:
         raise ValueError(f'Too few images: {count}')
 
-    if count > 30:
-        print(f"[TRAIN] WARNING: {count} images, using first 30", flush=True)
-        for img in sorted(images)[30:]:
+    if count > 150:
+        print(f"[TRAIN] WARNING: {count} images, using first 150", flush=True)
+        for img in sorted(images)[150:]:
             os.remove(img)
 
     # ─── Detect GPU ───
