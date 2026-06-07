@@ -177,9 +177,22 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
     with open(bnb_config, "w") as f:
         f.write('{"load_in_4bit": true, "bnb_4bit_quant_type": "nf4"}')
 
-    # ─── Base model ───
-    model_source = "black-forest-labs/FLUX.2-dev"
-    print(f"[TRAIN] Model: {model_source}", flush=True)
+    # ─── Base model (cache to network volume for fast subsequent runs) ───
+    model_id = "black-forest-labs/FLUX.2-dev"
+    volume_model_path = os.path.join(network_volume, "models", "FLUX.2-dev")
+
+    if os.path.exists(os.path.join(volume_model_path, "model_index.json")):
+        model_source = volume_model_path
+        print(f"[TRAIN] Model from volume cache: {model_source}", flush=True)
+    else:
+        print(f"[TRAIN] Model not cached, downloading {model_id} to volume...", flush=True)
+        from huggingface_hub import snapshot_download
+        model_source = snapshot_download(
+            model_id,
+            local_dir=volume_model_path,
+            ignore_patterns=["*.onnx", "*.xml"],
+        )
+        print(f"[TRAIN] Model cached to: {model_source}", flush=True)
 
     # ─── Find DreamBooth script ───
     train_script = "/app/diffusers/examples/dreambooth/train_dreambooth_lora_flux2.py"
