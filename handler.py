@@ -7,13 +7,30 @@ training via train_escort_lora.train(), fires the callback webhook
 the result dict.
 """
 
+import sys
 import traceback
-import runpod
-from train_escort_lora import train, fire_callback
+
+print("[HANDLER] handler.py loading...", flush=True)
+
+try:
+    import runpod
+    print(f"[HANDLER] runpod {runpod.__version__} OK", flush=True)
+except Exception as e:
+    print(f"[HANDLER] FATAL: cannot import runpod: {e}", flush=True, file=sys.stderr)
+    sys.exit(1)
+
+try:
+    from train_escort_lora import train, fire_callback
+    print("[HANDLER] train_escort_lora imported OK", flush=True)
+except Exception as e:
+    print(f"[HANDLER] FATAL: cannot import train_escort_lora: {e}", flush=True, file=sys.stderr)
+    traceback.print_exc()
+    sys.exit(1)
 
 
 def handler(job):
     """RunPod serverless handler entry point."""
+    print("[HANDLER] Job received", flush=True)
     inp = job.get("input", {})
 
     # Required
@@ -29,6 +46,8 @@ def handler(job):
     network_volume = inp.get("network_volume", "/runpod-volume")
     callback_url = inp.get("callback_url", "")
     webhook_secret = inp.get("webhook_secret", "")
+
+    print(f"[HANDLER] Training params: zip_url={zip_url[:60]}..., trigger={trigger_word}, steps={training_steps}, rank={lora_rank}, res={resolution}, lora_id={lora_id}", flush=True)
 
     try:
         result = train(
@@ -47,6 +66,7 @@ def handler(job):
         result["secret"] = webhook_secret
         fire_callback(callback_url, result)
 
+        print(f"[HANDLER] Training complete: {result.get('status')}", flush=True)
         return result
 
     except Exception as e:
@@ -65,4 +85,5 @@ def handler(job):
         raise  # Re-raise so RunPod marks job as FAILED
 
 
+print("[HANDLER] Starting RunPod serverless worker...", flush=True)
 runpod.serverless.start({"handler": handler})
