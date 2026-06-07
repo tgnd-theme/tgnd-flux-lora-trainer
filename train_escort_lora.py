@@ -181,15 +181,33 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
     model_id = "black-forest-labs/FLUX.2-dev"
     volume_model_path = os.path.join(network_volume, "models", "FLUX.2-dev")
 
+    # Validate cache: model_index.json + at least one large safetensors file
+    cache_valid = False
     if os.path.exists(os.path.join(volume_model_path, "model_index.json")):
+        safetensors = [f for f in os.listdir(volume_model_path)
+                       if f.endswith('.safetensors')] if os.path.isdir(volume_model_path) else []
+        # Check subdirs too (transformer/, text_encoder/, etc.)
+        for sub in os.listdir(volume_model_path) if os.path.isdir(volume_model_path) else []:
+            subdir = os.path.join(volume_model_path, sub)
+            if os.path.isdir(subdir):
+                safetensors += [os.path.join(sub, f) for f in os.listdir(subdir)
+                                if f.endswith('.safetensors')]
+        cache_valid = len(safetensors) >= 3  # Need transformer, VAE, text encoders
+        if not cache_valid:
+            print(f"[TRAIN] Cache incomplete ({len(safetensors)} safetensors), re-downloading...", flush=True)
+            shutil.rmtree(volume_model_path, ignore_errors=True)
+
+    if cache_valid:
         model_source = volume_model_path
         print(f"[TRAIN] Model from volume cache: {model_source}", flush=True)
     else:
-        print(f"[TRAIN] Model not cached, downloading {model_id} to volume...", flush=True)
+        print(f"[TRAIN] Downloading {model_id} to {volume_model_path}...", flush=True)
         from huggingface_hub import snapshot_download
+        os.makedirs(volume_model_path, exist_ok=True)
         model_source = snapshot_download(
             model_id,
             local_dir=volume_model_path,
+            token=os.environ.get('HF_TOKEN', hf_token),
             ignore_patterns=["*.onnx", "*.xml"],
         )
         print(f"[TRAIN] Model cached to: {model_source}", flush=True)
