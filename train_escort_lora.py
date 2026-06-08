@@ -387,6 +387,20 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
     return result
 
 
+def serve_output(output_dir, port=19123):
+    """Start a simple HTTP file server on the given port to allow downloading output files."""
+    import http.server
+    import functools
+
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=output_dir)
+    server = http.server.HTTPServer(('0.0.0.0', port), handler)
+    print(f"\n[SERVE] HTTP file server running on port {port}", flush=True)
+    print(f"[SERVE] Serving files from {output_dir}", flush=True)
+    print(f"[SERVE] Download LoRA at: http://0.0.0.0:{port}/pytorch_lora_weights.safetensors", flush=True)
+    print("[SERVE] Server will run indefinitely — stop the pod when done downloading.", flush=True)
+    server.serve_forever()
+
+
 def main():
     """Thin wrapper: reads env vars and calls train(). Backwards compatible for standalone use."""
     zip_url = os.environ.get('TRAINING_ZIP_URL', '')
@@ -421,6 +435,12 @@ def main():
             'error': str(e), 'secret': webhook_secret,
         })
         sys.exit(1)
+
+    # After training completes (success or fail), serve output directory via HTTP
+    # so files can be downloaded via the pod's proxy URL
+    output_dir = os.environ.get('OUTPUT_DIR', '/output/escort-lora')
+    if os.path.isdir(output_dir):
+        serve_output(output_dir)
 
 
 if __name__ == "__main__":
