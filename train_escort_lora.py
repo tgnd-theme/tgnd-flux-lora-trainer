@@ -165,12 +165,12 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
     gpu = detect_gpu()
 
     # Adjust resolution for VRAM
-    if gpu['vram_gb'] >= 40 and resolution < 1024:
+    if gpu['vram_gb'] >= 80 and resolution < 1024:
         resolution = 1024
-        print(f"[TRAIN] Upgraded resolution to 1024 (>40GB VRAM)", flush=True)
-    elif gpu['vram_gb'] < 24:
-        resolution = 512
-        print(f"[TRAIN] Capped resolution at 512 (<24GB VRAM)", flush=True)
+        print(f"[TRAIN] Upgraded resolution to 1024 (>=80GB VRAM)", flush=True)
+    elif gpu['vram_gb'] < 48:
+        resolution = min(resolution, 512)
+        print(f"[TRAIN] Capped resolution at {resolution} (<48GB VRAM)", flush=True)
 
     # Quantization config for NF4 (saves VRAM)
     bnb_config = "/data/bnb_config.json"
