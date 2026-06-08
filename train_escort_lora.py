@@ -239,6 +239,13 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
     grad_accum = 4
     checkpoint_steps = min(250, training_steps // 2)
 
+    # Clean up previous checkpoints to save disk space
+    for item in os.listdir(output_dir) if os.path.exists(output_dir) else []:
+        item_path = os.path.join(output_dir, item)
+        if os.path.isdir(item_path) and item.startswith("checkpoint-"):
+            print(f"[TRAIN] Cleaning old checkpoint: {item}", flush=True)
+            shutil.rmtree(item_path, ignore_errors=True)
+
     # Build training command — args differ between Flux 1 and Flux 2 scripts
     is_flux2 = "flux2" in train_script
     if is_flux2:
@@ -261,6 +268,7 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
   --lr_warmup_steps=50 \
   --max_train_steps={training_steps} \
   --checkpointing_steps={checkpoint_steps} \
+  --resume_from_checkpoint=latest \
   --mixed_precision=bf16 \
   --seed=42"""
     else:
@@ -281,6 +289,7 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
   --lr_warmup_steps=50 \
   --max_train_steps={training_steps} \
   --checkpointing_steps={checkpoint_steps} \
+  --resume_from_checkpoint=latest \
   --mixed_precision=bf16 \
   --seed=42"""
 
