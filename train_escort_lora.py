@@ -297,32 +297,49 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
     lora_size_mb = os.path.getsize(lora_file) / 1024 / 1024
     print(f"[TRAIN] LoRA weights: {lora_size_mb:.1f}MB", flush=True)
 
-    # ─── Save LoRA: network volume or HuggingFace Hub ───
+    # ─── Save LoRA: volume → HuggingFace Hub → callback upload ───
     storage_key = ""
-    volume_lora_dir = os.path.join(network_volume, "loras")
+    dest_filename = f"escort_{lora_id}.safetensors"
 
+    # Try 1: Network volume (fastest, if available)
+    volume_lora_dir = os.path.join(network_volume, "loras")
     if os.path.exists(network_volume):
         os.makedirs(volume_lora_dir, exist_ok=True)
-        dest_filename = f"escort_{lora_id}.safetensors"
         dest_path = os.path.join(volume_lora_dir, dest_filename)
-
         shutil.copy2(lora_file, dest_path)
         storage_key = dest_path
-
         print(f"[TRAIN] LoRA saved to volume: {storage_key}", flush=True)
-    else:
-        print("[TRAIN] No network volume, uploading to HuggingFace Hub...", flush=True)
 
-    # Upload LoRA file to WordPress if callback URL is available
+    # Try 2: HuggingFace Hub (reliable, works without volume)
+    if not storage_key and hf_token:
+        try:
+            from huggingface_hub import HfApi
+            hf_repo = "JulioIglesiass/tgnd-loras"
+            api = HfApi(token=hf_token)
+            # Create repo if needed (private)
+            try:
+                api.create_repo(hf_repo, repo_type="model", private=True, exist_ok=True)
+            except Exception:
+                pass
+            api.upload_file(
+                path_or_fileobj=lora_file,
+                path_in_repo=dest_filename,
+                repo_id=hf_repo,
+                repo_type="model",
+            )
+            storage_key = f"hf://{hf_repo}/{dest_filename}"
+            print(f"[TRAIN] LoRA uploaded to HF Hub: {storage_key}", flush=True)
+        except Exception as e:
+            print(f"[TRAIN] HF Hub upload failed: {e}", flush=True)
+
+    # Try 3: Callback URL upload (WordPress)
     callback_url = os.environ.get('CALLBACK_URL', '')
     webhook_secret = os.environ.get('WEBHOOK_SECRET', '')
-    if callback_url and not storage_key:
+    if not storage_key and callback_url:
         try:
             import requests
             upload_url = callback_url.replace('/webhook', '/upload-lora')
-            dest_filename = f"escort_{lora_id}.safetensors"
             print(f"[TRAIN] Uploading LoRA to {upload_url}...", flush=True)
-
             with open(lora_file, 'rb') as f:
                 resp = requests.post(
                     upload_url,
@@ -336,10 +353,8 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
                 print(f"[TRAIN] LoRA uploaded: {storage_key}", flush=True)
             else:
                 print(f"[TRAIN] Upload failed: {resp.status_code} {resp.text[:200]}", flush=True)
-                storage_key = lora_file
         except Exception as e:
             print(f"[TRAIN] Upload failed: {e}", flush=True)
-            storage_key = lora_file
 
     total_elapsed = time.time() - t_start
 
