@@ -178,44 +178,32 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
         f.write('{"load_in_4bit": true, "bnb_4bit_quant_type": "nf4"}')
 
     # ─── Base model ───
-    # Cache on network volume (persistent across cold starts, saves 20-30min download).
-    # Falls back to local disk if volume not available.
+    # Download to LOCAL disk (fast, no volume I/O issues).
+    # Volume is only used for final LoRA output (~20MB).
     model_id = "black-forest-labs/FLUX.2-dev"
-    volume_model_path = os.path.join(network_volume, "models", "FLUX.2-dev")
     local_model_path = "/data/models/FLUX.2-dev"
 
-    def check_cache(path):
-        """Check if model cache at path is valid."""
-        if not os.path.exists(os.path.join(path, "model_index.json")):
-            return False
+    # Check if model already on local disk (warm worker reuse)
+    cache_valid = False
+    if os.path.exists(os.path.join(local_model_path, "model_index.json")):
         safetensors = []
-        for root, dirs, files in os.walk(path):
+        for root, dirs, files in os.walk(local_model_path):
             safetensors += [f for f in files if f.endswith('.safetensors')]
-        return len(safetensors) >= 3
+        cache_valid = len(safetensors) >= 3
+        if not cache_valid:
+            print(f"[TRAIN] Local cache incomplete ({len(safetensors)} safetensors), re-downloading...", flush=True)
+            shutil.rmtree(local_model_path, ignore_errors=True)
 
-    # Priority: 1) local disk (warm worker), 2) network volume, 3) download
-    if check_cache(local_model_path):
+    if cache_valid:
         model_source = local_model_path
         print(f"[TRAIN] Model from local cache: {model_source}", flush=True)
-    elif os.path.exists(network_volume) and check_cache(volume_model_path):
-        model_source = volume_model_path
-        print(f"[TRAIN] Model from network volume: {model_source}", flush=True)
     else:
-        # Download to network volume if available, else local disk
-        if os.path.exists(network_volume):
-            target_path = volume_model_path
-            print(f"[TRAIN] Downloading {model_id} to network volume (persistent cache)...", flush=True)
-        else:
-            target_path = local_model_path
-            print(f"[TRAIN] Downloading {model_id} to local disk...", flush=True)
-        # Clean up any partial download
-        if os.path.exists(target_path):
-            shutil.rmtree(target_path, ignore_errors=True)
+        print(f"[TRAIN] Downloading {model_id} to local disk...", flush=True)
         from huggingface_hub import snapshot_download
-        os.makedirs(target_path, exist_ok=True)
+        os.makedirs(local_model_path, exist_ok=True)
         model_source = snapshot_download(
             model_id,
-            local_dir=target_path,
+            local_dir=local_model_path,
             token=os.environ.get('HF_TOKEN', hf_token),
             ignore_patterns=["*.onnx", "*.xml"],
         )
