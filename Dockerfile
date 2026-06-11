@@ -33,8 +33,11 @@ RUN pip install --no-cache-dir \
 RUN pip install --no-cache-dir \
     huggingface_hub requests runpod safetensors pyyaml
 
-# Verify imports
-RUN python3 -c "import torch; print(f'torch {torch.__version__} CUDA {torch.cuda.is_available()}'); from toolkit.job import get_job; print('ai-toolkit OK')"
+# ai-toolkit is not pip-installable, add to PYTHONPATH
+ENV PYTHONPATH=/app/ai-toolkit:$PYTHONPATH
+
+# Verify imports (CUDA=False is expected in CI, no GPU)
+RUN python3 -c "import torch; print(f'torch {torch.__version__}'); from toolkit.job import get_job; print('ai-toolkit OK')"
 
 # Copy training module + serverless handler + entrypoint
 COPY train_escort_lora.py /app/train_escort_lora.py
