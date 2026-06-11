@@ -2,9 +2,9 @@ FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
 WORKDIR /app
 
-# Upgrade torch for FLUX.2-dev compatibility
+# Upgrade torch + torchaudio + torchvision (must all match)
 RUN pip install --no-cache-dir \
-    torch==2.6.0 torchvision==0.21.0 \
+    torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 \
     --index-url https://download.pytorch.org/whl/cu124
 
 # Clone ai-toolkit (ostris) — proven FLUX.2 LoRA training framework
@@ -14,6 +14,11 @@ RUN git clone --depth 1 https://github.com/ostris/ai-toolkit.git /app/ai-toolkit
 
 # Install ai-toolkit dependencies
 RUN pip install --no-cache-dir -r /app/ai-toolkit/requirements.txt
+
+# Re-install torch stack AFTER requirements.txt to fix version conflicts
+RUN pip install --no-cache-dir \
+    torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 \
+    --index-url https://download.pytorch.org/whl/cu124
 
 # Install additional deps for our handler
 RUN pip install --no-cache-dir \
