@@ -26,16 +26,23 @@ import shutil
 import json
 
 
-def run(cmd, **kwargs):
+def run(cmd, stream=False, **kwargs):
     print(f"\n>>> {cmd}", flush=True)
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, **kwargs)
-    if result.stdout:
-        print(result.stdout, flush=True)
-    if result.stderr:
-        print(result.stderr, flush=True)
-    if result.returncode != 0:
-        error_detail = result.stderr[-2000:] if result.stderr else "no stderr"
-        raise RuntimeError(f"Command failed (exit {result.returncode}):\n{error_detail}")
+    if stream:
+        # Stream output in real-time (for long-running commands like training)
+        proc = subprocess.Popen(cmd, shell=True, stdout=sys.stdout, stderr=sys.stderr, **kwargs)
+        proc.wait()
+        if proc.returncode != 0:
+            raise RuntimeError(f"Command failed (exit {proc.returncode})")
+    else:
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, **kwargs)
+        if result.stdout:
+            print(result.stdout, flush=True)
+        if result.stderr:
+            print(result.stderr, flush=True)
+        if result.returncode != 0:
+            error_detail = result.stderr[-2000:] if result.stderr else "no stderr"
+            raise RuntimeError(f"Command failed (exit {result.returncode}):\n{error_detail}")
 
 
 def download_file(url, dest):
@@ -178,27 +185,29 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
         f.write('{"load_in_4bit": true, "bnb_4bit_quant_type": "nf4"}')
 
     # ─── Base model ───
-    # Download to LOCAL disk (fast, no volume I/O issues).
-    # Volume is only used for final LoRA output (~20MB).
     model_id = "black-forest-labs/FLUX.2-dev"
     local_model_path = "/data/models/FLUX.2-dev"
+    volume_model_path = os.path.join(network_volume, "models", "FLUX.2-dev")
 
-    # Check if model already on local disk (warm worker reuse)
-    cache_valid = False
-    if os.path.exists(os.path.join(local_model_path, "model_index.json")):
+    def _cache_valid(path):
+        if not os.path.exists(os.path.join(path, "model_index.json")):
+            return False
         safetensors = []
-        for root, dirs, files in os.walk(local_model_path):
+        for root, dirs, files in os.walk(path):
             safetensors += [f for f in files if f.endswith('.safetensors')]
-        cache_valid = len(safetensors) >= 3
-        if not cache_valid:
-            print(f"[TRAIN] Local cache incomplete ({len(safetensors)} safetensors), re-downloading...", flush=True)
-            shutil.rmtree(local_model_path, ignore_errors=True)
+        return len(safetensors) >= 3
 
-    if cache_valid:
+    # Priority: local disk (warm worker) → network volume (cold start) → download
+    if _cache_valid(local_model_path):
         model_source = local_model_path
-        print(f"[TRAIN] Model from local cache: {model_source}", flush=True)
+        print(f"[TRAIN] Model from local cache (warm worker)", flush=True)
+    elif os.path.exists(network_volume) and _cache_valid(volume_model_path):
+        print(f"[TRAIN] Copying model from network volume to local disk...", flush=True)
+        shutil.copytree(volume_model_path, local_model_path, dirs_exist_ok=True)
+        model_source = local_model_path
+        print(f"[TRAIN] Model copied from volume (cold start, no download needed)", flush=True)
     else:
-        print(f"[TRAIN] Downloading {model_id} to local disk...", flush=True)
+        print(f"[TRAIN] Downloading {model_id} from HuggingFace...", flush=True)
         from huggingface_hub import snapshot_download
         os.makedirs(local_model_path, exist_ok=True)
         model_source = snapshot_download(
@@ -208,6 +217,15 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
             ignore_patterns=["*.onnx", "*.xml"],
         )
         print(f"[TRAIN] Model downloaded to: {model_source}", flush=True)
+        # Cache to network volume for next cold start
+        if os.path.exists(network_volume):
+            try:
+                print(f"[TRAIN] Caching model to network volume...", flush=True)
+                os.makedirs(os.path.dirname(volume_model_path), exist_ok=True)
+                shutil.copytree(local_model_path, volume_model_path, dirs_exist_ok=True)
+                print(f"[TRAIN] Model cached on volume for future runs", flush=True)
+            except OSError as e:
+                print(f"[TRAIN] Volume cache failed ({e}), continuing without cache", flush=True)
 
     # ─── Find DreamBooth script ───
     train_script = "/app/diffusers/examples/dreambooth/train_dreambooth_lora_flux2.py"
@@ -236,7 +254,7 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
     print("=" * 60, flush=True)
     t0 = time.time()
 
-    grad_accum = 4
+    grad_accum = 1
     checkpoint_steps = min(250, training_steps // 2)
 
     # Clean up previous checkpoints to save disk space
@@ -293,7 +311,7 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
   --mixed_precision=bf16 \
   --seed=42"""
 
-    run(train_cmd)
+    run(train_cmd, stream=True)
 
     train_elapsed = time.time() - t0
     print(f"[TRAIN] Training completed in {train_elapsed / 60:.1f} minutes", flush=True)
@@ -313,11 +331,14 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
     # Try 1: Network volume (fastest, if available)
     volume_lora_dir = os.path.join(network_volume, "loras")
     if os.path.exists(network_volume):
-        os.makedirs(volume_lora_dir, exist_ok=True)
-        dest_path = os.path.join(volume_lora_dir, dest_filename)
-        shutil.copy2(lora_file, dest_path)
-        storage_key = dest_path
-        print(f"[TRAIN] LoRA saved to volume: {storage_key}", flush=True)
+        try:
+            os.makedirs(volume_lora_dir, exist_ok=True)
+            dest_path = os.path.join(volume_lora_dir, dest_filename)
+            shutil.copy2(lora_file, dest_path)
+            storage_key = dest_path
+            print(f"[TRAIN] LoRA saved to volume: {storage_key}", flush=True)
+        except OSError as e:
+            print(f"[TRAIN] Volume save failed ({e}), falling back to HF Hub...", flush=True)
 
     # Try 2: HuggingFace Hub (reliable, works without volume)
     if not storage_key and hf_token:
