@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
+FROM nvidia/cuda:12.6.3-devel-ubuntu22.04
 
 WORKDIR /app
 
@@ -11,23 +11,23 @@ RUN apt-get update && apt-get install -y \
     && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
     && ln -sf /usr/bin/python3.11 /usr/bin/python
 
-# Install torch 2.8 (required for ai-toolkit FLUX.2 support)
+# Install torch 2.11 + cu126 (2.6 causes meta tensor errors with ai-toolkit)
 RUN pip install --no-cache-dir \
-    torch==2.8.0 torchvision torchaudio \
-    --index-url https://download.pytorch.org/whl/cu124
+    torch==2.11.0 torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/cu126
 
 # Clone ai-toolkit
 RUN git clone --depth 1 https://github.com/ostris/ai-toolkit.git /app/ai-toolkit && \
     cd /app/ai-toolkit && \
     git submodule update --init --recursive
 
-# Install ai-toolkit requirements
+# Install ai-toolkit requirements (don't let it downgrade torch)
 RUN cd /app/ai-toolkit && pip install --no-cache-dir -r requirements.txt
 
-# Pin torch 2.8 again (requirements.txt may downgrade it)
+# Pin torch 2.11 again (requirements.txt may downgrade it)
 RUN pip install --no-cache-dir \
-    torch==2.8.0 torchvision torchaudio \
-    --index-url https://download.pytorch.org/whl/cu124
+    torch==2.11.0 torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/cu126
 
 # Additional deps for our handler
 RUN pip install --no-cache-dir \
