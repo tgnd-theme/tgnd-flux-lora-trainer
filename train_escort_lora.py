@@ -111,7 +111,7 @@ def build_training_config(trigger_word, image_dir, output_dir, model_id,
                     'caption_dropout_rate': 0.05,
                     'shuffle_tokens': False,
                     'cache_latents_to_disk': True,
-                    'resolution': [resolution],
+                    'resolution': [512, 768, resolution],
                 }],
                 'train': {
                     'batch_size': 1,
@@ -121,6 +121,7 @@ def build_training_config(trigger_word, image_dir, output_dir, model_id,
                     'train_text_encoder': False,
                     'gradient_checkpointing': True,
                     'noise_scheduler': 'flowmatch',
+                    'timestep_type': 'weighted',
                     'optimizer': 'adamw8bit',
                     'lr': 1e-4,
                     'ema_config': {
@@ -131,8 +132,14 @@ def build_training_config(trigger_word, image_dir, output_dir, model_id,
                 },
                 'model': {
                     'name_or_path': model_id,
-                    'is_flux': True,
-                    'quantize': False,
+                    'arch': 'flux2',
+                    'quantize': True,
+                    'quantize_te': True,
+                    'qtype': 'qfloat8',
+                    'low_vram': True,
+                    'model_kwargs': {
+                        'match_target_res': False,
+                    },
                 },
                 'sample': {
                     'sampler': 'flowmatch',
@@ -229,9 +236,8 @@ def train(zip_url, trigger_word='escort_person', training_steps=1500,
 
     # ─── Detect GPU ───
     gpu = detect_gpu()
-    if gpu['vram_gb'] < 48:
-        resolution = min(resolution, 512)
-        print(f"[TRAIN] Capped resolution at {resolution} (<48GB VRAM)", flush=True)
+    if gpu['vram_gb'] < 80:
+        print(f"[TRAIN] WARNING: {gpu['vram_gb']:.0f}GB VRAM — FLUX.2 needs 80GB+ with quantization", flush=True)
 
     # ─── Build config ───
     model_id = "black-forest-labs/FLUX.2-dev"
