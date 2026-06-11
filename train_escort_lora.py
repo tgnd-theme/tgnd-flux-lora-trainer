@@ -328,6 +328,14 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
     storage_key = ""
     dest_filename = f"escort_{lora_id}.safetensors"
 
+    # Clean up volume before saving (free space for LoRA)
+    if os.path.exists(network_volume):
+        for cleanup_dir in ["models", "checkpoints", "tmp"]:
+            cleanup_path = os.path.join(network_volume, cleanup_dir)
+            if os.path.isdir(cleanup_path):
+                print(f"[TRAIN] Cleaning volume: {cleanup_path}", flush=True)
+                shutil.rmtree(cleanup_path, ignore_errors=True)
+
     # Try 1: Network volume (fastest, if available)
     volume_lora_dir = os.path.join(network_volume, "loras")
     if os.path.exists(network_volume):
