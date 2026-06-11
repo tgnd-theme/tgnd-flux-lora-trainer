@@ -29,11 +29,19 @@ import json
 def run(cmd, stream=False, **kwargs):
     print(f"\n>>> {cmd}", flush=True)
     if stream:
-        # Stream output in real-time (for long-running commands like training)
-        proc = subprocess.Popen(cmd, shell=True, stdout=sys.stdout, stderr=sys.stderr, **kwargs)
+        # Stream output in real-time, but capture last lines for error reporting
+        proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, **kwargs)
+        last_lines = []
+        for line in proc.stdout:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            last_lines.append(line)
+            if len(last_lines) > 50:
+                last_lines.pop(0)
         proc.wait()
         if proc.returncode != 0:
-            raise RuntimeError(f"Command failed (exit {proc.returncode})")
+            tail = "".join(last_lines)[-2000:]
+            raise RuntimeError(f"Command failed (exit {proc.returncode}):\n{tail}")
     else:
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True, **kwargs)
         if result.stdout:
