@@ -1,36 +1,40 @@
-FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
 
 WORKDIR /app
 
-# Upgrade torch (base has 2.4, need >=2.5 for Flux 2 DreamBooth)
+# System dependencies
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y \
+    python3.11 python3.11-dev python3.11-venv python3-pip \
+    git wget curl ffmpeg libsm6 libxext6 \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python
+
+# Install torch 2.8 (required for ai-toolkit FLUX.2 support)
 RUN pip install --no-cache-dir \
-    torch==2.6.0 torchvision==0.21.0 \
+    torch==2.8.0 torchvision torchaudio \
     --index-url https://download.pytorch.org/whl/cu124
 
-# Clone diffusers from source first (training scripts require dev version)
-RUN git clone --depth 1 https://github.com/huggingface/diffusers /app/diffusers
+# Clone ai-toolkit
+RUN git clone --depth 1 https://github.com/ostris/ai-toolkit.git /app/ai-toolkit && \
+    cd /app/ai-toolkit && \
+    git submodule update --init --recursive
 
-# Install diffusers from source + other training dependencies
+# Install ai-toolkit requirements
+RUN cd /app/ai-toolkit && pip install --no-cache-dir -r requirements.txt
+
+# Pin torch 2.8 again (requirements.txt may downgrade it)
 RUN pip install --no-cache-dir \
-    /app/diffusers \
-    'transformers>=4.44.0,<5.0.0' \
-    'accelerate>=0.31.0' \
-    'peft>=0.14.0' \
-    bitsandbytes \
-    safetensors \
-    sentencepiece \
-    protobuf \
-    ftfy \
-    huggingface_hub \
-    requests \
-    Pillow \
-    runpod
+    torch==2.8.0 torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/cu124
 
-# Install DreamBooth example requirements
-RUN pip install --no-cache-dir -r /app/diffusers/examples/dreambooth/requirements_flux.txt 2>/dev/null || true
+# Additional deps for our handler
+RUN pip install --no-cache-dir \
+    huggingface_hub requests runpod safetensors pyyaml
 
-# Verify critical imports work at build time
-RUN python3 -c "from diffusers import FluxPipeline; from peft import LoraConfig; import diffusers; print(f'diffusers {diffusers.__version__} OK')"
+# Verify imports
+RUN python3 -c "import torch; print(f'torch {torch.__version__} CUDA {torch.cuda.is_available()}'); from toolkit.job import get_job; print('ai-toolkit OK')"
 
 # Copy training module + serverless handler + entrypoint
 COPY train_escort_lora.py /app/train_escort_lora.py
@@ -38,5 +42,4 @@ COPY handler.py /app/handler.py
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
-# Entrypoint: auto-detects serverless (RUNPOD_ENDPOINT_ID) vs pod mode
 CMD ["/app/entrypoint.sh"]
