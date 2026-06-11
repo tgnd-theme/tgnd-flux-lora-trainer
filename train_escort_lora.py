@@ -57,25 +57,124 @@ def validate_images(image_dir):
     return images
 
 
-def generate_captions(image_dir, trigger_word):
-    """Generate .txt caption files for images that don't already have one.
-    If a .txt file already exists (e.g. from the training ZIP), keep it.
-    Only generates trigger-word-only captions as fallback."""
+def auto_caption_image(image_path, trigger_word, anthropic_api_key):
+    """Use Claude Haiku Vision to generate a descriptive caption for one image."""
+    import base64
+    import requests as req
+
+    ext = os.path.splitext(image_path)[1].lower()
+    media_types = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+                   '.png': 'image/png', '.webp': 'image/webp'}
+    media_type = media_types.get(ext, 'image/jpeg')
+
+    with open(image_path, 'rb') as f:
+        img_b64 = base64.b64encode(f.read()).decode()
+
+    prompt = f"""Describe this photo for AI image training. Write ONE line, no quotes.
+Format: {trigger_word}, a [body type] [ethnicity] woman with [hair], [skin tone], [eyes], [expression], [clothing or state of undress], [pose/action], [setting/location], [framing: close-up/half body/full body], [lighting], [style]
+
+Rules:
+- Start with "{trigger_word},"
+- Be specific about body type (petite slim, athletic, curvy etc)
+- Describe clothing exactly or state "topless" / specific undergarments
+- Describe the pose and what the person is doing
+- Describe the setting (kitchen, bedroom, outdoor market, tropical garden etc)
+- Describe framing (close-up face portrait, half body shot, full body standing shot, rear view etc)
+- Keep it factual, no artistic interpretation
+- One continuous line, no line breaks"""
+
+    resp = req.post(
+        'https://api.anthropic.com/v1/messages',
+        headers={
+            'x-api-key': anthropic_api_key,
+            'anthropic-version': '2023-06-01',
+            'content-type': 'application/json',
+        },
+        json={
+            'model': 'claude-haiku-4-5-20251001',
+            'max_tokens': 300,
+            'messages': [{
+                'role': 'user',
+                'content': [
+                    {'type': 'image', 'source': {
+                        'type': 'base64', 'media_type': media_type, 'data': img_b64}},
+                    {'type': 'text', 'text': prompt},
+                ],
+            }],
+        },
+        timeout=30,
+    )
+
+    if resp.status_code == 200:
+        data = resp.json()
+        caption = data['content'][0]['text'].strip()
+        # Ensure it starts with trigger word
+        if not caption.startswith(trigger_word):
+            caption = f"{trigger_word}, {caption}"
+        return caption
+    else:
+        print(f"[CAPTION] API error {resp.status_code}: {resp.text[:200]}", flush=True)
+        return None
+
+
+def generate_captions(image_dir, trigger_word, anthropic_api_key=''):
+    """Generate .txt caption files for training images.
+
+    Priority:
+    1. Keep existing .txt captions from ZIP
+    2. Auto-caption via Claude Haiku Vision (if API key provided)
+    3. Fall back to trigger word only
+    """
     valid_ext = ('.jpg', '.jpeg', '.png', '.webp')
     existing = 0
-    generated = 0
-    for f in os.listdir(image_dir):
+    auto_captioned = 0
+    fallback = 0
+
+    # Collect images that need captions
+    needs_caption = []
+    for f in sorted(os.listdir(image_dir)):
         if f.lower().endswith(valid_ext) and not f.startswith('.'):
             stem = os.path.splitext(f)[0]
             caption_path = os.path.join(image_dir, f"{stem}.txt")
             if os.path.exists(caption_path) and os.path.getsize(caption_path) > 5:
                 existing += 1
             else:
-                with open(caption_path, "w") as cf:
+                needs_caption.append((os.path.join(image_dir, f), caption_path))
+
+    print(f"[CAPTION] {existing} captions from ZIP, {len(needs_caption)} need captioning", flush=True)
+
+    # Auto-caption with Claude Vision if API key available
+    if needs_caption and anthropic_api_key:
+        print(f"[CAPTION] Auto-captioning {len(needs_caption)} images with Claude Haiku Vision...", flush=True)
+        for i, (img_path, caption_path) in enumerate(needs_caption):
+            fname = os.path.basename(img_path)
+            try:
+                caption = auto_caption_image(img_path, trigger_word, anthropic_api_key)
+                if caption:
+                    with open(caption_path, 'w') as cf:
+                        cf.write(caption)
+                    auto_captioned += 1
+                    print(f"[CAPTION] {i+1}/{len(needs_caption)} {fname}: {caption[:80]}...", flush=True)
+                else:
+                    with open(caption_path, 'w') as cf:
+                        cf.write(trigger_word)
+                    fallback += 1
+                    print(f"[CAPTION] {i+1}/{len(needs_caption)} {fname}: fallback to trigger word", flush=True)
+            except Exception as e:
+                with open(caption_path, 'w') as cf:
                     cf.write(trigger_word)
-                generated += 1
-    print(f"[TRAIN] Captions: {existing} from ZIP, {generated} generated (trigger: {trigger_word})", flush=True)
-    return existing + generated
+                fallback += 1
+                print(f"[CAPTION] {i+1}/{len(needs_caption)} {fname}: error {e}, fallback", flush=True)
+    elif needs_caption:
+        print(f"[CAPTION] No Anthropic API key — using trigger word for {len(needs_caption)} images", flush=True)
+        for img_path, caption_path in needs_caption:
+            with open(caption_path, 'w') as cf:
+                cf.write(trigger_word)
+            fallback += 1
+
+    total = existing + auto_captioned + fallback
+    print(f"[CAPTION] Done: {existing} from ZIP, {auto_captioned} auto-captioned, {fallback} trigger-word-only ({total} total)", flush=True)
+    return total
 
 
 def detect_gpu():
@@ -180,7 +279,7 @@ def fire_callback(callback_url, payload):
 
 def train(zip_url, trigger_word='escort_person', training_steps=1500,
           lora_rank=16, resolution=1024, hf_token='', lora_id='',
-          network_volume='/runpod-volume'):
+          network_volume='/runpod-volume', anthropic_api_key=''):
     t_start = time.time()
 
     print("=" * 60, flush=True)
@@ -234,7 +333,7 @@ def train(zip_url, trigger_word='escort_person', training_steps=1500,
             os.remove(img)
 
     # ─── Generate captions ───
-    generate_captions(image_dir, trigger_word)
+    generate_captions(image_dir, trigger_word, anthropic_api_key=anthropic_api_key)
 
     # ─── Detect GPU ───
     gpu = detect_gpu()
@@ -390,12 +489,14 @@ def main():
     lora_id = os.environ.get('LORA_ID', '')
     network_volume = os.environ.get('NETWORK_VOLUME', '/runpod-volume')
     webhook_secret = os.environ.get('WEBHOOK_SECRET', '')
+    anthropic_api_key = os.environ.get('ANTHROPIC_API_KEY', '')
 
     try:
         result = train(zip_url=zip_url, trigger_word=trigger_word,
                        training_steps=training_steps, lora_rank=lora_rank,
                        resolution=resolution, hf_token=hf_token,
-                       lora_id=lora_id, network_volume=network_volume)
+                       lora_id=lora_id, network_volume=network_volume,
+                       anthropic_api_key=anthropic_api_key)
         result['lora_id'] = lora_id
         result['secret'] = webhook_secret
         fire_callback(callback_url, result)

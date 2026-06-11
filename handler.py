@@ -46,6 +46,7 @@ def handler(job):
     network_volume = inp.get("network_volume", "/runpod-volume")
     callback_url = inp.get("callback_url", "")
     webhook_secret = inp.get("webhook_secret", "")
+    anthropic_api_key = inp.get("anthropic_api_key", "")
 
     print(f"[HANDLER] Training params: zip_url={zip_url[:60]}..., trigger={trigger_word}, steps={training_steps}, rank={lora_rank}, res={resolution}, lora_id={lora_id}", flush=True)
 
@@ -59,6 +60,7 @@ def handler(job):
             hf_token=hf_token,
             lora_id=lora_id,
             network_volume=network_volume,
+            anthropic_api_key=anthropic_api_key,
         )
 
         # Belt-and-suspenders: fire our own callback in addition to RunPod webhook
