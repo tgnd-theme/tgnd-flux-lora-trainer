@@ -226,7 +226,13 @@ def train(zip_url, trigger_word='escort_person', training_steps=1500,
     # ─── HuggingFace auth (FLUX.2-dev is gated) ───
     if hf_token:
         os.environ['HF_TOKEN'] = hf_token
-        run(f"huggingface-cli login --token {hf_token}")
+        os.environ['HUGGING_FACE_HUB_TOKEN'] = hf_token
+        # Use 'hf' CLI (huggingface-cli is deprecated in newer versions)
+        try:
+            run(f"hf auth login --token {hf_token}")
+        except RuntimeError:
+            # Fallback: env var is enough, CLI login is just a convenience
+            print("[TRAIN] HF CLI login failed, using env var auth", flush=True)
 
     # ─── Download + extract training images ───
     print("[TRAIN] Downloading training images...", flush=True)
