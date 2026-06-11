@@ -272,9 +272,9 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
   --bnb_quantization_config_path={bnb_config} \
   --cache_latents \
   --use_8bit_adam \
-  --learning_rate=1e-4 \
+  --learning_rate=4e-4 \
   --lr_scheduler=constant_with_warmup \
-  --lr_warmup_steps=50 \
+  --lr_warmup_steps=100 \
   --max_train_steps={training_steps} \
   --checkpointing_steps={checkpoint_steps} \
   --resume_from_checkpoint=latest \
