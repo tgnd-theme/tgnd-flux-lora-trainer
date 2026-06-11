@@ -160,7 +160,7 @@ def build_training_config(trigger_word, image_dir, output_dir, model_id,
                 'model': {
                     'name_or_path': model_id,
                     'is_flux': True,
-                    'quantize': True,
+                    'quantize': False,
                 },
                 'sample': {
                     'sampler': 'flowmatch',
