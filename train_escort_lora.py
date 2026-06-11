@@ -315,75 +315,83 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
     lora_size_mb = os.path.getsize(lora_file) / 1024 / 1024
     print(f"[TRAIN] LoRA weights: {lora_size_mb:.1f}MB", flush=True)
 
-    # ─── Save LoRA: volume → HuggingFace Hub → callback upload ───
+    # ─── Save LoRA: volume → HuggingFace Hub ───
     storage_key = ""
     dest_filename = f"escort_{lora_id}.safetensors"
 
-    # Clean up volume before saving (free space for LoRA)
+    # Aggressively clean volume — delete EVERYTHING except /loras/
     if os.path.exists(network_volume):
-        for cleanup_dir in ["models", "checkpoints", "tmp"]:
-            cleanup_path = os.path.join(network_volume, cleanup_dir)
-            if os.path.isdir(cleanup_path):
-                print(f"[TRAIN] Cleaning volume: {cleanup_path}", flush=True)
-                shutil.rmtree(cleanup_path, ignore_errors=True)
+        try:
+            statvfs = os.statvfs(network_volume)
+            free_gb = (statvfs.f_bavail * statvfs.f_frsize) / (1024**3)
+            print(f"[TRAIN] Volume free space BEFORE cleanup: {free_gb:.1f}GB", flush=True)
+        except Exception:
+            free_gb = 0
+            print("[TRAIN] Could not check disk space", flush=True)
 
-    # Try 1: Network volume (fastest, if available)
+        for item in os.listdir(network_volume):
+            if item == "loras":
+                continue  # keep existing loras
+            item_path = os.path.join(network_volume, item)
+            try:
+                if os.path.isdir(item_path):
+                    print(f"[TRAIN] Cleaning volume: {item_path}", flush=True)
+                    shutil.rmtree(item_path, ignore_errors=True)
+                elif os.path.isfile(item_path):
+                    os.remove(item_path)
+            except Exception:
+                pass
+
+        try:
+            statvfs = os.statvfs(network_volume)
+            free_gb = (statvfs.f_bavail * statvfs.f_frsize) / (1024**3)
+            print(f"[TRAIN] Volume free space AFTER cleanup: {free_gb:.1f}GB", flush=True)
+        except Exception:
+            pass
+
+    # Try 1: Network volume
     volume_lora_dir = os.path.join(network_volume, "loras")
     if os.path.exists(network_volume):
         try:
             os.makedirs(volume_lora_dir, exist_ok=True)
             dest_path = os.path.join(volume_lora_dir, dest_filename)
             shutil.copy2(lora_file, dest_path)
-            storage_key = dest_path
-            print(f"[TRAIN] LoRA saved to volume: {storage_key}", flush=True)
+            # Verify the copy
+            if os.path.exists(dest_path) and os.path.getsize(dest_path) == os.path.getsize(lora_file):
+                storage_key = dest_path
+                print(f"[TRAIN] LoRA saved to volume: {storage_key} ({os.path.getsize(dest_path)/1024/1024:.1f}MB)", flush=True)
+            else:
+                print("[TRAIN] Volume save: file copy verification failed!", flush=True)
         except OSError as e:
-            print(f"[TRAIN] Volume save failed ({e}), falling back to HF Hub...", flush=True)
+            print(f"[TRAIN] Volume save failed ({e}), trying HF Hub...", flush=True)
 
-    # Try 2: HuggingFace Hub (reliable, works without volume)
-    if not storage_key and hf_token:
+    # Try 2: HuggingFace Hub (ALWAYS try, even if volume worked — belt and suspenders)
+    hf_storage_key = ""
+    if hf_token:
         try:
             from huggingface_hub import HfApi
             hf_repo = "JulioIglesiass/tgnd-loras"
             api = HfApi(token=hf_token)
-            # Create repo if needed (private)
             try:
                 api.create_repo(hf_repo, repo_type="model", private=True, exist_ok=True)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[TRAIN] HF create_repo: {e}", flush=True)
             api.upload_file(
                 path_or_fileobj=lora_file,
                 path_in_repo=dest_filename,
                 repo_id=hf_repo,
                 repo_type="model",
             )
-            storage_key = f"hf://{hf_repo}/{dest_filename}"
-            print(f"[TRAIN] LoRA uploaded to HF Hub: {storage_key}", flush=True)
+            hf_storage_key = f"hf://{hf_repo}/{dest_filename}"
+            print(f"[TRAIN] LoRA uploaded to HF Hub: {hf_storage_key}", flush=True)
+            if not storage_key:
+                storage_key = hf_storage_key
         except Exception as e:
             print(f"[TRAIN] HF Hub upload failed: {e}", flush=True)
 
-    # Try 3: Callback URL upload (WordPress)
-    callback_url = os.environ.get('CALLBACK_URL', '')
-    webhook_secret = os.environ.get('WEBHOOK_SECRET', '')
-    if not storage_key and callback_url:
-        try:
-            import requests
-            upload_url = callback_url.replace('/webhook', '/upload-lora')
-            print(f"[TRAIN] Uploading LoRA to {upload_url}...", flush=True)
-            with open(lora_file, 'rb') as f:
-                resp = requests.post(
-                    upload_url,
-                    files={'lora_file': (dest_filename, f, 'application/octet-stream')},
-                    data={'lora_id': lora_id, 'secret': webhook_secret},
-                    timeout=300,
-                )
-            if resp.status_code == 200:
-                result_data = resp.json()
-                storage_key = result_data.get('storage_key', '')
-                print(f"[TRAIN] LoRA uploaded: {storage_key}", flush=True)
-            else:
-                print(f"[TRAIN] Upload failed: {resp.status_code} {resp.text[:200]}", flush=True)
-        except Exception as e:
-            print(f"[TRAIN] Upload failed: {e}", flush=True)
+    if not storage_key:
+        print("[TRAIN] WARNING: LoRA not saved to any persistent storage!", flush=True)
+        print(f"[TRAIN] LoRA is at {lora_file} on local disk (will be lost when worker exits)", flush=True)
 
     total_elapsed = time.time() - t_start
 
