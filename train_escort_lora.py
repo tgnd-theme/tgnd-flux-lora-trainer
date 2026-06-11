@@ -195,26 +195,18 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
     # ─── Base model ───
     model_id = "black-forest-labs/FLUX.2-dev"
     local_model_path = "/data/models/FLUX.2-dev"
-    volume_model_path = os.path.join(network_volume, "models", "FLUX.2-dev")
 
-    def _cache_valid(path):
-        if not os.path.exists(os.path.join(path, "model_index.json")):
-            return False
-        safetensors = []
-        for root, dirs, files in os.walk(path):
-            safetensors += [f for f in files if f.endswith('.safetensors')]
-        return len(safetensors) >= 3
+    # Check local disk cache (warm worker reuse)
+    required_files = ["model_index.json", "scheduler/scheduler_config.json"]
+    cache_ok = all(os.path.exists(os.path.join(local_model_path, f)) for f in required_files)
 
-    # Priority: local disk (warm worker) → network volume (cold start) → download
-    if _cache_valid(local_model_path):
+    if cache_ok:
         model_source = local_model_path
         print(f"[TRAIN] Model from local cache (warm worker)", flush=True)
-    elif os.path.exists(network_volume) and _cache_valid(volume_model_path):
-        print(f"[TRAIN] Copying model from network volume to local disk...", flush=True)
-        shutil.copytree(volume_model_path, local_model_path, dirs_exist_ok=True)
-        model_source = local_model_path
-        print(f"[TRAIN] Model copied from volume (cold start, no download needed)", flush=True)
     else:
+        # Always download fresh from HuggingFace (volume cache unreliable)
+        if os.path.exists(local_model_path):
+            shutil.rmtree(local_model_path, ignore_errors=True)
         print(f"[TRAIN] Downloading {model_id} from HuggingFace...", flush=True)
         from huggingface_hub import snapshot_download
         os.makedirs(local_model_path, exist_ok=True)
@@ -225,15 +217,6 @@ def train(zip_url, trigger_word='escort_person', training_steps=1000,
             ignore_patterns=["*.onnx", "*.xml"],
         )
         print(f"[TRAIN] Model downloaded to: {model_source}", flush=True)
-        # Cache to network volume for next cold start
-        if os.path.exists(network_volume):
-            try:
-                print(f"[TRAIN] Caching model to network volume...", flush=True)
-                os.makedirs(os.path.dirname(volume_model_path), exist_ok=True)
-                shutil.copytree(local_model_path, volume_model_path, dirs_exist_ok=True)
-                print(f"[TRAIN] Model cached on volume for future runs", flush=True)
-            except OSError as e:
-                print(f"[TRAIN] Volume cache failed ({e}), continuing without cache", flush=True)
 
     # ─── Find DreamBooth script ───
     train_script = "/app/diffusers/examples/dreambooth/train_dreambooth_lora_flux2.py"
