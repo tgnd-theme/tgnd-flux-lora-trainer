@@ -58,18 +58,24 @@ def validate_images(image_dir):
 
 
 def generate_captions(image_dir, trigger_word):
-    """Generate .txt caption files for each image. Just the trigger word."""
+    """Generate .txt caption files for images that don't already have one.
+    If a .txt file already exists (e.g. from the training ZIP), keep it.
+    Only generates trigger-word-only captions as fallback."""
     valid_ext = ('.jpg', '.jpeg', '.png', '.webp')
-    count = 0
+    existing = 0
+    generated = 0
     for f in os.listdir(image_dir):
         if f.lower().endswith(valid_ext) and not f.startswith('.'):
             stem = os.path.splitext(f)[0]
             caption_path = os.path.join(image_dir, f"{stem}.txt")
-            with open(caption_path, "w") as cf:
-                cf.write(trigger_word)
-            count += 1
-    print(f"[TRAIN] Generated {count} caption files (trigger: {trigger_word})", flush=True)
-    return count
+            if os.path.exists(caption_path) and os.path.getsize(caption_path) > 5:
+                existing += 1
+            else:
+                with open(caption_path, "w") as cf:
+                    cf.write(trigger_word)
+                generated += 1
+    print(f"[TRAIN] Captions: {existing} from ZIP, {generated} generated (trigger: {trigger_word})", flush=True)
+    return existing + generated
 
 
 def detect_gpu():
@@ -111,7 +117,7 @@ def build_training_config(trigger_word, image_dir, output_dir, model_id,
                     'caption_dropout_rate': 0.05,
                     'shuffle_tokens': False,
                     'cache_latents_to_disk': True,
-                    'resolution': [512, 768, resolution],
+                    'resolution': [768, resolution],
                 }],
                 'train': {
                     'batch_size': 1,
@@ -124,10 +130,6 @@ def build_training_config(trigger_word, image_dir, output_dir, model_id,
                     'timestep_type': 'weighted',
                     'optimizer': 'adamw8bit',
                     'lr': 1e-4,
-                    'ema_config': {
-                        'use_ema': True,
-                        'ema_decay': 0.99,
-                    },
                     'dtype': 'bf16',
                 },
                 'model': {
@@ -177,7 +179,7 @@ def fire_callback(callback_url, payload):
 
 
 def train(zip_url, trigger_word='escort_person', training_steps=1500,
-          lora_rank=32, resolution=1024, hf_token='', lora_id='',
+          lora_rank=16, resolution=1024, hf_token='', lora_id='',
           network_volume='/runpod-volume'):
     t_start = time.time()
 
@@ -381,7 +383,7 @@ def main():
     zip_url = os.environ.get('TRAINING_ZIP_URL', '')
     trigger_word = os.environ.get('TRIGGER_WORD', 'escort_person')
     training_steps = int(os.environ.get('TRAINING_STEPS', '1500'))
-    lora_rank = int(os.environ.get('LORA_RANK', '32'))
+    lora_rank = int(os.environ.get('LORA_RANK', '16'))
     resolution = int(os.environ.get('RESOLUTION', '1024'))
     hf_token = os.environ.get('HF_TOKEN', '')
     callback_url = os.environ.get('CALLBACK_URL', '')
