@@ -81,7 +81,8 @@ Rules:
 - Describe the setting (kitchen, bedroom, outdoor market, tropical garden etc)
 - Describe framing (close-up face portrait, half body shot, full body standing shot, rear view etc)
 - Keep it factual, no artistic interpretation
-- One continuous line, no line breaks"""
+- One continuous line, no line breaks
+- NEVER mention any watermark, logo, or website name visible in the photo — ignore those completely"""
 
     resp = req.post(
         'https://api.anthropic.com/v1/messages',
@@ -175,6 +176,115 @@ def generate_captions(image_dir, trigger_word, anthropic_api_key=''):
     total = existing + auto_captioned + fallback
     print(f"[CAPTION] Done: {existing} from ZIP, {auto_captioned} auto-captioned, {fallback} trigger-word-only ({total} total)", flush=True)
     return total
+
+
+def remove_watermarks(image_dir):
+    """Remove Zishy/similar watermarks from training images.
+
+    Scans each image for small text watermarks in corners using OpenCV.
+    Detects light-colored text regions in the bottom 15% and inpaints them.
+    Also crops bottom 3% as safety margin for any remaining artifacts.
+    """
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        print("[WATERMARK] OpenCV not available — skipping watermark removal", flush=True)
+        return 0
+
+    valid_ext = ('.jpg', '.jpeg', '.png', '.webp')
+    cleaned = 0
+
+    for f in sorted(os.listdir(image_dir)):
+        if not f.lower().endswith(valid_ext) or f.startswith('.'):
+            continue
+
+        img_path = os.path.join(image_dir, f)
+        img = cv2.imread(img_path)
+        if img is None:
+            continue
+
+        h, w = img.shape[:2]
+        modified = False
+
+        # Strategy 1: Detect light text in bottom 15% of image
+        bottom_region_y = int(h * 0.85)
+        bottom = img[bottom_region_y:, :].copy()
+        gray_bottom = cv2.cvtColor(bottom, cv2.COLOR_BGR2GRAY)
+
+        # Watermarks are typically light/white semi-transparent text
+        # Threshold for bright pixels that could be watermark text
+        _, bright_mask = cv2.threshold(gray_bottom, 200, 255, cv2.THRESH_BINARY)
+
+        # Look for connected components that resemble text (small, elongated)
+        contours, _ = cv2.findContours(bright_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # Group nearby contours that could form watermark text
+        watermark_regions = []
+        for cnt in contours:
+            x_c, y_c, w_c, h_c = cv2.boundingRect(cnt)
+            area = cv2.contourArea(cnt)
+            # Text-like: small to medium height, reasonable aspect ratio
+            if 5 < h_c < int(h * 0.08) and area > 20 and w_c > 3:
+                watermark_regions.append((x_c, y_c + bottom_region_y, w_c, h_c))
+
+        # If we found potential watermark text regions, cluster and inpaint
+        if len(watermark_regions) >= 3:  # Watermark text has multiple characters
+            # Create inpaint mask for the full image
+            mask = np.zeros((h, w), dtype=np.uint8)
+            for (x_r, y_r, w_r, h_r) in watermark_regions:
+                # Expand slightly for better inpainting
+                pad_x, pad_y = 3, 3
+                x1 = max(0, x_r - pad_x)
+                y1 = max(0, y_r - pad_y)
+                x2 = min(w, x_r + w_r + pad_x)
+                y2 = min(h, y_r + h_r + pad_y)
+                mask[y1:y2, x1:x2] = 255
+
+            # Inpaint the watermark regions
+            img = cv2.inpaint(img, mask, inpaintRadius=5, flags=cv2.INPAINT_TELEA)
+            modified = True
+
+        # Strategy 2: Also check corners for smaller watermarks
+        corner_size_h = int(h * 0.12)
+        corner_size_w = int(w * 0.35)
+        corners = [
+            (w - corner_size_w, h - corner_size_h, w, h),       # bottom-right
+            (0, h - corner_size_h, corner_size_w, h),             # bottom-left
+            (w - corner_size_w, 0, w, corner_size_h),             # top-right
+            (0, 0, corner_size_w, corner_size_h),                 # top-left
+        ]
+
+        for (cx1, cy1, cx2, cy2) in corners:
+            corner = img[cy1:cy2, cx1:cx2]
+            gray_corner = cv2.cvtColor(corner, cv2.COLOR_BGR2GRAY)
+            _, bright = cv2.threshold(gray_corner, 210, 255, cv2.THRESH_BINARY)
+            bright_ratio = np.count_nonzero(bright) / bright.size
+
+            # If 0.5-15% of corner is bright text-like pixels, likely watermark
+            if 0.005 < bright_ratio < 0.15:
+                cnts, _ = cv2.findContours(bright, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                text_like = [c for c in cnts if 5 < cv2.boundingRect(c)[3] < corner_size_h * 0.5 and cv2.contourArea(c) > 15]
+                if len(text_like) >= 3:
+                    mask = np.zeros(corner.shape[:2], dtype=np.uint8)
+                    for cnt in text_like:
+                        x_t, y_t, w_t, h_t = cv2.boundingRect(cnt)
+                        mask[max(0,y_t-2):y_t+h_t+2, max(0,x_t-2):x_t+w_t+2] = 255
+                    corner_clean = cv2.inpaint(corner, mask, inpaintRadius=5, flags=cv2.INPAINT_TELEA)
+                    img[cy1:cy2, cx1:cx2] = corner_clean
+                    modified = True
+
+        # Safety: crop bottom 3% to catch any remaining watermark fragments
+        crop_rows = max(1, int(h * 0.03))
+        img = img[:h - crop_rows, :]
+        modified = True
+
+        if modified:
+            cv2.imwrite(img_path, img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            cleaned += 1
+
+    print(f"[WATERMARK] Cleaned {cleaned} images (watermark detection + bottom crop)", flush=True)
+    return cleaned
 
 
 def generate_face_crops(image_dir, trigger_word, min_face_size=150):
@@ -516,6 +626,11 @@ def train(zip_url, trigger_word='escort_person', training_steps=2500,
 
     os.remove(zip_path)
 
+    # ─── Remove watermarks before anything else ───
+    wm_cleaned = remove_watermarks(image_dir)
+    if wm_cleaned > 0:
+        print(f"[TRAIN] Removed watermarks from {wm_cleaned} images", flush=True)
+
     # ─── Validate images ───
     images = validate_images(image_dir)
     count = len(images)
@@ -529,6 +644,22 @@ def train(zip_url, trigger_word='escort_person', training_steps=2500,
 
     # ─── Generate captions ───
     generate_captions(image_dir, trigger_word, anthropic_api_key=anthropic_api_key)
+
+    # ─── Clean watermark references from captions ───
+    import re
+    watermark_terms = re.compile(r'\b(zishy|zishy\.com|zishy style|watermark|logo|website name|branding)\b', re.IGNORECASE)
+    for f in os.listdir(image_dir):
+        if f.endswith('.txt'):
+            cap_path = os.path.join(image_dir, f)
+            with open(cap_path) as cf:
+                text = cf.read()
+            cleaned = watermark_terms.sub('', text)
+            cleaned = re.sub(r',\s*,', ',', cleaned)  # fix double commas
+            cleaned = re.sub(r'\s{2,}', ' ', cleaned).strip()
+            if cleaned != text:
+                with open(cap_path, 'w') as cf:
+                    cf.write(cleaned)
+                print(f"[CAPTION] Cleaned watermark references from {f}", flush=True)
 
     # ─── Generate face crops (after captions so crops get face-focused captions) ───
     face_crops = generate_face_crops(image_dir, trigger_word)
