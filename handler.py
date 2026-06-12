@@ -39,7 +39,7 @@ def handler(job):
     lora_id = str(inp.get("lora_id", ""))
 
     # Optional with defaults
-    training_steps = int(inp.get("training_steps", 1000))
+    training_steps = int(inp.get("training_steps", 2500))
     lora_rank = int(inp.get("lora_rank", 16))
     resolution = int(inp.get("resolution", 512))
     hf_token = inp.get("hf_token", "")
@@ -47,6 +47,12 @@ def handler(job):
     callback_url = inp.get("callback_url", "")
     webhook_secret = inp.get("webhook_secret", "")
     anthropic_api_key = inp.get("anthropic_api_key", "")
+    runpod_api_key = inp.get("runpod_api_key", "")
+
+    # Make RunPod API key available for regularization image generation
+    if runpod_api_key:
+        import os as _os
+        _os.environ['RUNPOD_API_KEY'] = runpod_api_key
 
     print(f"[HANDLER] Training params: zip_url={zip_url[:60]}..., trigger={trigger_word}, steps={training_steps}, rank={lora_rank}, res={resolution}, lora_id={lora_id}", flush=True)
 

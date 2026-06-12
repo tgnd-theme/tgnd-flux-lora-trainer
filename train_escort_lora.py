@@ -177,6 +177,201 @@ def generate_captions(image_dir, trigger_word, anthropic_api_key=''):
     return total
 
 
+def generate_face_crops(image_dir, trigger_word, min_face_size=150):
+    """Detect faces in training images and create cropped close-ups as extra training data.
+
+    Uses OpenCV's Haar cascade for face detection. Each detected face is saved
+    as a square crop (padded to include some context) with a caption focusing
+    on facial features. This dramatically improves face consistency.
+    """
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        print("[FACE] OpenCV not available — skipping face crops", flush=True)
+        return 0
+
+    cascade_paths = [
+        '/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml',
+        '/usr/local/share/opencv4/haarcascades/haarcascade_frontalface_default.xml',
+        cv2.data.haarcascades + 'haarcascade_frontalface_default.xml',
+    ]
+    cascade = None
+    for p in cascade_paths:
+        if os.path.exists(p):
+            cascade = cv2.CascadeClassifier(p)
+            break
+    if cascade is None or cascade.empty():
+        print("[FACE] Haar cascade not found — skipping face crops", flush=True)
+        return 0
+
+    valid_ext = ('.jpg', '.jpeg', '.png', '.webp')
+    crops_saved = 0
+
+    for f in sorted(os.listdir(image_dir)):
+        if not f.lower().endswith(valid_ext) or f.startswith('.') or f.startswith('facecrop_'):
+            continue
+
+        img_path = os.path.join(image_dir, f)
+        img = cv2.imread(img_path)
+        if img is None:
+            continue
+
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5,
+                                          minSize=(min_face_size, min_face_size))
+
+        for i, (x, y, w, h) in enumerate(faces):
+            # Expand crop area by 80% for context (hair, neck, shoulders)
+            pad = int(max(w, h) * 0.8)
+            x1 = max(0, x - pad)
+            y1 = max(0, y - pad)
+            x2 = min(img.shape[1], x + w + pad)
+            y2 = min(img.shape[0], y + h + pad)
+
+            # Make it square
+            crop_w = x2 - x1
+            crop_h = y2 - y1
+            size = max(crop_w, crop_h)
+            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+            x1 = max(0, cx - size // 2)
+            y1 = max(0, cy - size // 2)
+            x2 = min(img.shape[1], x1 + size)
+            y2 = min(img.shape[0], y1 + size)
+
+            crop = img[y1:y2, x1:x2]
+            if crop.shape[0] < 256 or crop.shape[1] < 256:
+                continue
+
+            stem = os.path.splitext(f)[0]
+            crop_name = f"facecrop_{stem}_{i}.jpg"
+            crop_path = os.path.join(image_dir, crop_name)
+            cv2.imwrite(crop_path, crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
+
+            # Read original caption for context, write face-focused caption
+            orig_caption_path = os.path.join(image_dir, f"{stem}.txt")
+            if os.path.exists(orig_caption_path):
+                with open(orig_caption_path) as cf:
+                    orig_caption = cf.read().strip()
+                # Extract body description from original caption
+                face_caption = f"{trigger_word}, close-up face portrait, {orig_caption.split(',', 1)[1].strip() if ',' in orig_caption else orig_caption}"
+            else:
+                face_caption = f"{trigger_word}, close-up face portrait, natural lighting, shallow depth of field"
+
+            caption_path = os.path.join(image_dir, f"facecrop_{stem}_{i}.txt")
+            with open(caption_path, 'w') as cf:
+                cf.write(face_caption)
+
+            crops_saved += 1
+
+    print(f"[FACE] Generated {crops_saved} face crops from training images", flush=True)
+    return crops_saved
+
+
+def generate_regularization_images(image_dir, num_images=20):
+    """Generate diverse regularization images using base Flux model (no LoRA).
+
+    These 'class images' teach the model what generic women look like,
+    preventing overfitting of body proportions to the training subject.
+    Images are saved with generic captions (no trigger word).
+    """
+    try:
+        import requests as req
+        import base64
+    except ImportError:
+        print("[REG] requests not available — skipping reg images", flush=True)
+        return 0
+
+    # Use the RunPod inference endpoint to generate diverse women
+    api_key = os.environ.get('RUNPOD_API_KEY', os.environ.get('TGND_RUNPOD_API_KEY', ''))
+    endpoint = os.environ.get('INFERENCE_ENDPOINT', 'https://api.runpod.ai/v2/ipporwh8ephgo5')
+
+    if not api_key:
+        print("[REG] No RunPod API key — skipping reg images", flush=True)
+        return 0
+
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    # Diverse prompts for regularization — no trigger word, just generic women
+    reg_prompts = [
+        "a young woman with blonde hair, blue eyes, standing in a park, natural daylight, full body shot, Kodak Portra 400",
+        "a woman with curly red hair, freckles, sitting at a cafe, natural light, half body portrait",
+        "an Asian woman with short black hair, wearing a white dress, urban street, full body standing shot",
+        "a Black woman with braided hair, warm smile, close-up portrait, golden hour lighting",
+        "a tall athletic woman with brown hair, wearing jeans and t-shirt, living room, casual pose",
+        "a petite woman with long auburn hair, green eyes, standing by window, soft natural light, half body",
+        "a curvy woman with dark hair, sitting on couch, relaxed pose, apartment interior, natural light",
+        "a slim woman with straight blonde hair, outdoor garden, standing pose, morning light, full body",
+        "a woman with wavy brown hair, hazel eyes, close-up face portrait, shallow depth of field",
+        "an athletic woman with ponytail, sports bra, standing in gym, natural pose, half body shot",
+        "a young Latina woman with long dark hair, olive skin, outdoor market, candid pose, natural daylight",
+        "a Nordic woman with light hair, pale skin, bedroom setting, morning light, sitting on bed",
+        "a Middle Eastern woman with dark features, elegant dress, hotel lobby, full body standing",
+        "a woman with pixie cut brown hair, casual outfit, kitchen setting, cooking, candid shot",
+        "an Indian woman with long black hair, traditional clothing, outdoor setting, warm tones",
+        "a woman with shoulder-length blonde hair, bikini, beach setting, golden hour, full body",
+        "a petite Asian woman with straight hair, white top, sitting at desk, natural window light",
+        "a tall woman with curly dark hair, red dress, city street at dusk, full body walking",
+        "a woman with medium brown hair, casual lingerie, bedroom setting, soft morning light",
+        "a young woman with long straight hair, sundress, tropical garden, standing pose, natural light",
+    ]
+
+    import random
+    import time as _time
+
+    saved = 0
+    jobs = []
+
+    # Submit all jobs
+    for i, prompt in enumerate(reg_prompts[:num_images]):
+        payload = {
+            "prompt": prompt,
+            "width": 768, "height": 1024,
+            "guidance_scale": 3.5,
+            "num_inference_steps": 20,
+            "seed": random.randint(1, 999999),
+        }
+        try:
+            r = req.post(f"{endpoint}/run", headers=headers, json={"input": payload}, timeout=30)
+            job_id = r.json().get("id")
+            if job_id:
+                jobs.append((job_id, i, prompt))
+                print(f"[REG] Submitted reg image {i+1}/{num_images}", flush=True)
+        except Exception as e:
+            print(f"[REG] Submit failed for image {i+1}: {e}", flush=True)
+
+    # Collect results
+    for job_id, idx, prompt in jobs:
+        for attempt in range(60):  # 10 min timeout
+            _time.sleep(10)
+            try:
+                r = req.get(f"{endpoint}/status/{job_id}", headers=headers, timeout=15)
+                d = r.json()
+                status = d.get("status")
+                if status == "COMPLETED":
+                    img_b64 = d.get("output", {}).get("image", "")
+                    if img_b64:
+                        img_data = base64.b64decode(img_b64)
+                        img_path = os.path.join(image_dir, f"reg_{idx:03d}.jpg")
+                        with open(img_path, "wb") as f:
+                            f.write(img_data)
+                        # Caption WITHOUT trigger word — this is key
+                        caption_path = os.path.join(image_dir, f"reg_{idx:03d}.txt")
+                        with open(caption_path, "w") as f:
+                            f.write(prompt)
+                        saved += 1
+                        print(f"[REG] Saved reg image {idx+1}", flush=True)
+                    break
+                elif status == "FAILED":
+                    print(f"[REG] Reg image {idx+1} failed", flush=True)
+                    break
+            except Exception:
+                pass
+
+    print(f"[REG] Generated {saved}/{num_images} regularization images", flush=True)
+    return saved
+
+
 def detect_gpu():
     import torch
     cc = torch.cuda.get_device_capability()
@@ -228,7 +423,7 @@ def build_training_config(trigger_word, image_dir, output_dir, model_id,
                     'noise_scheduler': 'flowmatch',
                     'timestep_type': 'weighted',
                     'optimizer': 'adamw8bit',
-                    'lr': 1e-4,
+                    'lr': 5e-5,
                     'dtype': 'bf16',
                 },
                 'model': {
@@ -277,7 +472,7 @@ def fire_callback(callback_url, payload):
         print(f"[TRAIN] Callback failed: {e}", flush=True)
 
 
-def train(zip_url, trigger_word='escort_person', training_steps=1500,
+def train(zip_url, trigger_word='escort_person', training_steps=2500,
           lora_rank=16, resolution=1024, hf_token='', lora_id='',
           network_volume='/runpod-volume', anthropic_api_key=''):
     t_start = time.time()
@@ -334,6 +529,21 @@ def train(zip_url, trigger_word='escort_person', training_steps=1500,
 
     # ─── Generate captions ───
     generate_captions(image_dir, trigger_word, anthropic_api_key=anthropic_api_key)
+
+    # ─── Generate face crops (after captions so crops get face-focused captions) ───
+    face_crops = generate_face_crops(image_dir, trigger_word)
+    if face_crops > 0:
+        print(f"[TRAIN] Added {face_crops} face crops to training data", flush=True)
+
+    # ─── Generate regularization images ───
+    reg_count = generate_regularization_images(image_dir, num_images=20)
+    if reg_count > 0:
+        print(f"[TRAIN] Added {reg_count} regularization images to training data", flush=True)
+
+    # Re-count total images
+    images = validate_images(image_dir)
+    count = len(images)
+    print(f"[TRAIN] Total training images (originals + crops + reg): {count}", flush=True)
 
     # ─── Detect GPU ───
     gpu = detect_gpu()
@@ -481,7 +691,7 @@ def train(zip_url, trigger_word='escort_person', training_steps=1500,
 def main():
     zip_url = os.environ.get('TRAINING_ZIP_URL', '')
     trigger_word = os.environ.get('TRIGGER_WORD', 'escort_person')
-    training_steps = int(os.environ.get('TRAINING_STEPS', '1500'))
+    training_steps = int(os.environ.get('TRAINING_STEPS', '2500'))
     lora_rank = int(os.environ.get('LORA_RANK', '16'))
     resolution = int(os.environ.get('RESOLUTION', '1024'))
     hf_token = os.environ.get('HF_TOKEN', '')

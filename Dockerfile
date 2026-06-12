@@ -31,7 +31,7 @@ RUN pip install --no-cache-dir \
 
 # Additional deps for our handler
 RUN pip install --no-cache-dir \
-    huggingface_hub requests runpod safetensors pyyaml
+    huggingface_hub requests runpod safetensors pyyaml opencv-python-headless
 
 # ai-toolkit is not pip-installable, add to PYTHONPATH
 ENV PYTHONPATH=/app/ai-toolkit:$PYTHONPATH
